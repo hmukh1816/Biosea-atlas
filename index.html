@@ -9,8 +9,6 @@
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.heat/0.2.0/leaflet-heat.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/pmtiles@3.0.6/dist/pmtiles.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/protomaps-leaflet@4.0.0/dist/protomaps-leaflet.js"></script>
 <style>
 :root {
   --ocean-deep: #020c18;
@@ -874,51 +872,28 @@ layers['unprotected-bio'] = L.tileLayer.wms(
 // NAVIGATOR PMTILES LOADER
 // ─────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────
-// NAVIGATOR PMTILES — one file per LFP score (from KMZ export)
-// Layer name inside each PMTiles is 'doc' (KMZ default)
+// NAVIGATOR GEOJSON — loaded from GitHub Releases
 // ─────────────────────────────────────────────────────────
 const LFP_FILES = {
-  3: 'data/navigator_lfp3.pmtiles',
-  4: 'data/navigator_lfp4.pmtiles',
-  5: 'data/navigator_lfp5.pmtiles',
-  // Add 1 and 2 here once converted:
-  // 1: 'data/navigator_lfp1.pmtiles',
-  // 2: 'data/navigator_lfp2.pmtiles',
+  3: 'https://github.com/hmukh1816/Biosea-atlas/releases/download/v1.0/navigator_lfp3.geojson',
+  4: 'https://github.com/hmukh1816/Biosea-atlas/releases/download/v1.0/navigator_lfp4.geojson',
+  5: 'https://github.com/hmukh1816/Biosea-atlas/releases/download/v1.0/navigator_lfp5.geojson',
 };
 
-// Combined layer uses LFP4 as representative until all files available
-const NAVIGATOR_COMBINED = 'data/navigator_lfp4.pmtiles';
 let navigatorVectorLayer = null;
 
-function makePaintRules(color) {
-  return [{
-    dataLayer: 'doc',   // KMZ exports always use 'doc' as layer name
-    symbolizer: new protomapsL.PolygonSymbolizer({
-      fill: color,
-      opacity: 0.7,
-      stroke: '#00d4c8',
-      width: 0.5
-    })
-  }];
-}
-
-function makeCombinedPaintRules() {
-  // For combined view, cycle through all available files separately
-  return [{
-    dataLayer: 'doc',
-    symbolizer: new protomapsL.PolygonSymbolizer({
-      fill: LFP_COLORS[4],
-      opacity: 0.7,
-      stroke: '#00d4c8',
-      width: 0.5
-    })
-  }];
+function lfpStyle(lfpNum) {
+  return {
+    fillColor: LFP_COLORS[lfpNum] || '#059669',
+    fillOpacity: 0.7,
+    color: '#00d4c8',
+    weight: 0.5,
+    opacity: 0.9
+  };
 }
 
 function loadNavigatorPMTiles(show) {
   if (!show) {
-    if (navigatorVectorLayer) map.removeLayer(navigatorVectorLayer);
-    // Also hide all individual LFP layers
     [3,4,5].forEach(n => {
       if (layers['lfp'+n] && map.hasLayer(layers['lfp'+n])) {
         map.removeLayer(layers['lfp'+n]);
@@ -927,14 +902,10 @@ function loadNavigatorPMTiles(show) {
     });
     return;
   }
-  // Show combined = show all available LFP layers simultaneously
   [3,4,5].forEach(n => {
     loadLFPLayer(n, true);
     document.getElementById('lfp'+n).checked = true;
   });
-  navigatorLayerLoaded = true;
-  document.getElementById('gee-status').innerHTML = '✅ Navigator layers loaded (LFP 3–5)';
-  document.getElementById('gee-status').style.borderColor = 'rgba(0,212,200,0.25)';
 }
 
 function loadLFPLayer(lfpNum, show) {
@@ -943,23 +914,37 @@ function loadLFPLayer(lfpNum, show) {
     if (layers[id]) map.removeLayer(layers[id]);
     return;
   }
-  if (!LFP_FILES[lfpNum]) {
-    document.getElementById('gee-status').innerHTML =
-      `⚠️ LFP${lfpNum} not yet converted — add <code>data/navigator_lfp${lfpNum}.pmtiles</code>`;
-    return;
-  }
   if (layers[id]) { layers[id].addTo(map); return; }
-  try {
-    layers[id] = protomapsL.leafletLayer({
-      url: LFP_FILES[lfpNum],
-      paint_rules: makePaintRules(LFP_COLORS[lfpNum]),
-      label_rules: [],
-      attribution: 'ProtectedSeas Navigator'
+
+  document.getElementById('gee-status').innerHTML = `⏳ Loading LFP${lfpNum}...`;
+
+  fetch(LFP_FILES[lfpNum])
+    .then(r => {
+      if (!r.ok) throw new Error('Failed to fetch LFP' + lfpNum);
+      return r.json();
+    })
+    .then(data => {
+      // Store for MPA status checks
+      if (!navigatorData) navigatorData = { features: [] };
+      navigatorData.features = navigatorData.features.concat(data.features);
+
+      layers[id] = L.geoJSON(data, {
+        style: () => lfpStyle(lfpNum),
+        onEachFeature: (feature, layer) => {
+          const name = feature.properties.Name || feature.properties.name || feature.properties.SITE_NAME || 'MPA';
+          layer.bindTooltip(`<b>${name}</b><br>LFP Score: ${lfpNum}`, { sticky: true });
+        }
+      }).addTo(map);
+
+      navigatorLayerLoaded = true;
+      document.getElementById('gee-status').innerHTML = '✅ Navigator layers loaded (LFP 3–5)';
+      document.getElementById('gee-status').style.borderColor = 'rgba(0,212,200,0.25)';
+    })
+    .catch(err => {
+      document.getElementById('gee-status').innerHTML = `⚠️ LFP${lfpNum} failed to load`;
+      document.getElementById('gee-status').style.borderColor = 'rgba(255,100,100,0.3)';
+      console.error(err);
     });
-    layers[id].addTo(map);
-  } catch(err) {
-    console.error('LFP' + lfpNum + ' load error:', err);
-  }
 }
 
 // ─────────────────────────────────────────────────────────
